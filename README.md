@@ -1,6 +1,12 @@
 # IT Scripts - releases
 
-Update channel for the IT Scripts app.
+Release channel for the IT Scripts app.
 
-Each release holds `ITScripts.bin`: the app, encrypted. It can only be opened by IT Scripts itself, which
-checks here for a newer version when it starts and offers to update.
+- Each release holds two encrypted copies of the app:
+  - `ITScripts.bin` is for the app's own updates. Only IT Scripts can open it.
+  - `ITScripts-launch.bin` is for `get.ps1`. It opens only with the launcher password.
+- `get.ps1` opens IT Scripts on a PC from PowerShell. It downloads the latest release, asks for the password and starts the app from `C:\ITScripts`:
+
+  ```powershell
+  irm https://raw.githubusercontent.com/obtusecoder/itsuite-get/main/get.ps1 | iex
+  ```
