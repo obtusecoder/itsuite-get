@@ -3,9 +3,9 @@
 #     irm https://<your link> | iex
 #
 # Downloads the latest release from github.com/obtusecoder/itsuite-get, unlocks it with your launcher
-# password and starts it from C:\ITScripts, which only administrators can open. When IT Scripts closes it
-# offers to copy anything the tools saved (logs, reports) to the desktop, then deletes C:\ITScripts.
-# Asks for admin first (like MAS), since IT Scripts needs it anyway.
+# password, saves it to C:\ITScripts and starts it (IT Scripts asks for admin itself, then locks that folder
+# so only administrators can open it). When IT Scripts closes it offers to copy anything the tools saved
+# (logs, reports) to the desktop, then deletes C:\ITScripts.
 #
 # This file is public. The download it fetches is locked with the password (AES-256-CBC + HMAC-SHA256,
 # keys from PBKDF2-SHA256), so the link alone gets nobody anything.
@@ -20,23 +20,17 @@
     $asset = 'ITScripts-launch.bin'
     $dir   = if ($env:ITSCRIPTS_LAUNCH_DIR) { $env:ITSCRIPTS_LAUNCH_DIR } else { Join-Path $env:SystemDrive 'ITScripts' }
     $exe   = Join-Path $dir 'ITScripts.exe'
-    $self  = 'https://raw.githubusercontent.com/obtusecoder/itsuite-get/main/get.ps1'
-    $testing = [bool]$env:ITSCRIPTS_LAUNCH_SOURCE
-    $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 
-    # Shows a message and, in the admin window this opens, waits so it can be read before the window closes
-    function Stop-Launch([string]$Message) {
-        Write-Host "  $Message" -ForegroundColor Red
-        if ($env:ITSCRIPTS_LAUNCH_PAUSE) { Read-Host '  Press Enter to close' | Out-Null }
-    }
+    function Stop-Launch([string]$Message) { Write-Host "  $Message" -ForegroundColor Red }
 
-    if (-not $isAdmin -and -not $testing) {
-        Write-Host '  IT Scripts needs admin. Approve the prompt to carry on in a new window...'
-        $command = "`$env:ITSCRIPTS_LAUNCH_PAUSE = '1'; irm '$self' | iex"
-        $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($command))
-        try { Start-Process powershell.exe -Verb RunAs -ArgumentList "-NoProfile -ExecutionPolicy Bypass -EncodedCommand $encoded" }
-        catch { Write-Host "  Admin wasn't approved, so IT Scripts can't start." -ForegroundColor Red }
-        return
+    # IT Scripts asks for admin itself (its manifest requires it), so this window never needs to be elevated
+    function Start-ITScripts {
+        Write-Host '  Starting IT Scripts - approve the admin prompt.'
+        try { Start-Process $exe -WorkingDirectory $dir }
+        catch {
+            if ($_.Exception.NativeErrorCode -eq 1223 -or $_.Exception.Message -match 'cancel') { Stop-Launch "The admin prompt was cancelled, so IT Scripts didn't start. Run the command again to retry." }
+            else { Stop-Launch "IT Scripts couldn't start: $($_.Exception.Message)" }
+        }
     }
 
     function Get-Plain([Security.SecureString]$s) {
@@ -86,8 +80,8 @@
     if (Test-Path $exe) { try { $have = Normalise ([version](Get-Item $exe).VersionInfo.FileVersion) } catch { } }
 
     if ($have -and (-not $latest -or $have -ge $latest)) {
-        Write-Host "  Starting IT Scripts $($have.Major).$($have.Minor) from $dir"
-        Start-Process $exe
+        Write-Host "  IT Scripts $($have.Major).$($have.Minor) is already in $dir."
+        Start-ITScripts
         return
     }
     if (-not $release) { Stop-Launch 'Try again when this PC is online.'; return }
@@ -115,17 +109,15 @@
     if (-not $plain) { Stop-Launch 'Giving up after 3 tries.'; return }
     if ($plain.Length -lt 1000000 -or $plain[0] -ne 0x4D -or $plain[1] -ne 0x5A) { Stop-Launch "The download isn't a valid ITScripts.exe."; return }
 
-    New-Item -ItemType Directory -Force $dir | Out-Null
-    if ($isAdmin) {
-        # Only administrators and SYSTEM can open the folder: the logs and any BitLocker key backups the
-        # tools save there stay private from other users of this PC
-        & icacls.exe $dir /inheritance:r /grant:r '*S-1-5-32-544:(OI)(CI)F' '*S-1-5-18:(OI)(CI)F' | Out-Null
-        if ($LASTEXITCODE) { Stop-Launch "Couldn't lock down $dir (icacls exit $LASTEXITCODE)."; return }
+    try {
+        New-Item -ItemType Directory -Force $dir | Out-Null
+        [IO.File]::WriteAllBytes($exe, $plain)
+        # Tells IT Scripts it was opened from the link: it locks this folder to administrators while it
+        # runs and removes it when it closes
+        Set-Content (Join-Path $dir '.opened-from-link') 'Created by the IT Scripts launcher. IT Scripts deletes this folder when it closes.'
+    } catch {
+        Stop-Launch "Couldn't save to $dir. If IT Scripts is still open, close it. If the folder was left from an earlier run, run this command from an admin PowerShell, or delete $dir. ($($_.Exception.Message))"
+        return
     }
-    try { [IO.File]::WriteAllBytes($exe, $plain) }
-    catch { Stop-Launch "Couldn't save $exe - close IT Scripts if it's open, then run this again. ($($_.Exception.Message))"; return }
-    # Tells IT Scripts it was opened from the link, so it removes this folder when it closes
-    Set-Content (Join-Path $dir '.opened-from-link') 'Created by the IT Scripts launcher. IT Scripts deletes this folder when it closes.'
-    Write-Host "  Starting IT Scripts..."
-    Start-Process $exe
+    Start-ITScripts
 }
