@@ -2,7 +2,8 @@
 #
 #     irm https://<your link> | iex
 #
-# Downloads the latest release from github.com/obtusecoder/itsuite-get, unlocks it with your launcher
+# Downloads the latest release from github.com/obtusecoder/itsuite-get (or, when a test version newer
+# than that is up as a pre-release, asks which one - Enter keeps the latest), unlocks it with your launcher
 # password, saves it to a new folder C:\ITScripts\run-xxxx and starts it (IT Scripts asks for admin itself,
 # then locks that folder so only administrators can open it). When IT Scripts closes it offers to copy
 # anything the tools saved (logs, reports) to the desktop, then deletes the folder (and C:\ITScripts once
@@ -71,14 +72,48 @@
     if ($env:ITSCRIPTS_LAUNCH_SOURCE) {
         $release = [pscustomobject]@{ tag_name = $env:ITSCRIPTS_LAUNCH_VERSION; assets = @([pscustomobject]@{ name = $asset; browser_download_url = $env:ITSCRIPTS_LAUNCH_SOURCE; size = (Get-Item $env:ITSCRIPTS_LAUNCH_SOURCE).Length }) }
     } else {
-        try { $release = Invoke-RestMethod "https://api.github.com/repos/$repo/releases/latest" -Headers @{ 'User-Agent' = 'ITScripts-Launcher' } -TimeoutSec 20 }
+        $headers = @{ 'User-Agent' = 'ITScripts-Launcher' }
+        try { $release = Invoke-RestMethod "https://api.github.com/repos/$repo/releases/latest" -Headers $headers -TimeoutSec 20 }
         catch { Write-Host "  Couldn't reach GitHub: $($_.Exception.Message)" -ForegroundColor Yellow }
+
+        # A test version (pre-release) newer than the latest release? Offer a choice; Enter keeps the latest.
+        # Once that version is released properly it's no longer newer, so the question goes away by itself.
+        if ($release) {
+            $betas = @()
+            try {
+                $latestVersion = [version](($release.tag_name.TrimStart('v') -split '-', 2)[0])
+                $all = Invoke-RestMethod "https://api.github.com/repos/$repo/releases?per_page=20" -Headers $headers -TimeoutSec 20
+                $betas = @(@($all) | ForEach-Object { $_ } | Where-Object {
+                    $_.prerelease -and -not $_.draft -and @($_.assets | Where-Object { $_.name -eq $asset }).Count -and
+                    [version](($_.tag_name.TrimStart('v') -split '-', 2)[0]) -gt $latestVersion
+                })
+            } catch { }   # no list, no choice: the latest it is
+            if ($betas.Count) {
+                $choices = @($release) + $betas
+                Write-Host '  Which version?'
+                for ($i = 0; $i -lt $choices.Count; $i++) {
+                    $label = if ($choices[$i].name) { $choices[$i].name } else { "IT Scripts $($choices[$i].tag_name.TrimStart('v'))" }
+                    $note = if ($i -eq 0) { '(latest - press Enter for this)' } else { '(test version)' }
+                    Write-Host ("    {0}  {1}  " -f ($i + 1), $label) -NoNewline
+                    Write-Host $note -ForegroundColor DarkGray
+                }
+                while ($true) {
+                    $pick = "$(Read-Host '  Choose')".Trim()
+                    $n = 0
+                    if (-not $pick) { break }
+                    if ([int]::TryParse($pick, [ref]$n) -and $n -ge 1 -and $n -le $choices.Count) { $release = $choices[$n - 1]; break }
+                    Write-Host "  Type a number from 1 to $($choices.Count), or press Enter for the latest." -ForegroundColor Yellow
+                }
+                Write-Host ''
+            }
+        }
     }
     if (-not $release) { Stop-Launch 'Try again when this PC is online.'; return }
     $file = @($release.assets | Where-Object { $_.name -eq $asset })[0]
     if (-not $file) { Stop-Launch "The latest release ($($release.tag_name)) can't be opened from the command line. Use the USB stick."; return }
 
-    Write-Host ("  Downloading IT Scripts {0} ({1:N0} MB)..." -f $release.tag_name.TrimStart('v'), ($file.size / 1MB))
+    $shown = if ($release.name) { $release.name -replace '^IT Scripts\s*', '' } else { $release.tag_name.TrimStart('v') }
+    Write-Host ("  Downloading IT Scripts {0} ({1:N0} MB)..." -f $shown, ($file.size / 1MB))
     if ($env:ITSCRIPTS_LAUNCH_SOURCE) { $data = [IO.File]::ReadAllBytes($env:ITSCRIPTS_LAUNCH_SOURCE) }
     else {
         $web = New-Object Net.WebClient
