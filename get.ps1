@@ -3,9 +3,10 @@
 #     irm https://<your link> | iex
 #
 # Downloads the latest release from github.com/obtusecoder/itsuite-get, unlocks it with your launcher
-# password, saves it to C:\ITScripts and starts it (IT Scripts asks for admin itself, then locks that folder
-# so only administrators can open it). When IT Scripts closes it offers to copy anything the tools saved
-# (logs, reports) to the desktop, then deletes C:\ITScripts.
+# password, saves it to a new folder C:\ITScripts\run-xxxx and starts it (IT Scripts asks for admin itself,
+# then locks that folder so only administrators can open it). When IT Scripts closes it offers to copy
+# anything the tools saved (logs, reports) to the desktop, then deletes the folder (and C:\ITScripts once
+# it's empty).
 #
 # This file is public. The download it fetches is locked with the password (AES-256-CBC + HMAC-SHA256,
 # keys from PBKDF2-SHA256), so the link alone gets nobody anything.
@@ -18,8 +19,7 @@
 
     $repo  = 'obtusecoder/itsuite-get'
     $asset = 'ITScripts-launch.bin'
-    $dir   = if ($env:ITSCRIPTS_LAUNCH_DIR) { $env:ITSCRIPTS_LAUNCH_DIR } else { Join-Path $env:SystemDrive 'ITScripts' }
-    $exe   = Join-Path $dir 'ITScripts.exe'
+    $root  = if ($env:ITSCRIPTS_LAUNCH_DIR) { $env:ITSCRIPTS_LAUNCH_DIR } else { Join-Path $env:SystemDrive 'ITScripts' }
 
     function Stop-Launch([string]$Message) { Write-Host "  $Message" -ForegroundColor Red }
 
@@ -38,7 +38,6 @@
         try { [Runtime.InteropServices.Marshal]::PtrToStringBSTR($p) } finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($p) }
     }
 
-    function Normalise([version]$v) { New-Object Version $v.Major, $v.Minor, ([math]::Max($v.Build, 0)), ([math]::Max($v.Revision, 0)) }
 
     # Returns the unlocked exe bytes, or $null if the password is wrong. Throws if the file isn't a launcher download.
     function Unlock-ITScripts([byte[]]$Data, [string]$Password) {
@@ -75,15 +74,6 @@
         try { $release = Invoke-RestMethod "https://api.github.com/repos/$repo/releases/latest" -Headers @{ 'User-Agent' = 'ITScripts-Launcher' } -TimeoutSec 20 }
         catch { Write-Host "  Couldn't reach GitHub: $($_.Exception.Message)" -ForegroundColor Yellow }
     }
-    $latest = if ($release) { Normalise ([version]($release.tag_name.TrimStart('v'))) } else { $null }
-    $have = $null
-    if (Test-Path $exe) { try { $have = Normalise ([version](Get-Item $exe).VersionInfo.FileVersion) } catch { } }
-
-    if ($have -and (-not $latest -or $have -ge $latest)) {
-        Write-Host "  IT Scripts $($have.Major).$($have.Minor) is already in $dir."
-        Start-ITScripts
-        return
-    }
     if (-not $release) { Stop-Launch 'Try again when this PC is online.'; return }
     $file = @($release.assets | Where-Object { $_.name -eq $asset })[0]
     if (-not $file) { Stop-Launch "The latest release ($($release.tag_name)) can't be opened from the command line. Use the USB stick."; return }
@@ -109,6 +99,16 @@
     if (-not $plain) { Stop-Launch 'Giving up after 3 tries.'; return }
     if ($plain.Length -lt 1000000 -or $plain[0] -ne 0x4D -or $plain[1] -ne 0x5A) { Stop-Launch "The download isn't a valid ITScripts.exe."; return }
 
+    # A new folder each time, so a folder left by an earlier run (locked to admins) never gets in the way.
+    # If C:\ITScripts itself can't be written to (left locked by an older version), use this user's AppData.
+    $run = 'run-' + [guid]::NewGuid().ToString('N').Substring(0, 8)
+    $dir = Join-Path $root $run
+    try { New-Item -ItemType Directory -Force $dir -ErrorAction Stop | Out-Null }
+    catch {
+        $root = Join-Path $env:LOCALAPPDATA 'ITScripts'
+        $dir = Join-Path $root $run
+    }
+    $exe = Join-Path $dir 'ITScripts.exe'
     try {
         New-Item -ItemType Directory -Force $dir | Out-Null
         [IO.File]::WriteAllBytes($exe, $plain)
@@ -116,7 +116,7 @@
         # runs and removes it when it closes
         Set-Content (Join-Path $dir '.opened-from-link') 'Created by the IT Scripts launcher. IT Scripts deletes this folder when it closes.'
     } catch {
-        Stop-Launch "Couldn't save to $dir. If IT Scripts is still open, close it. If the folder was left from an earlier run, run this command from an admin PowerShell, or delete $dir. ($($_.Exception.Message))"
+        Stop-Launch "Couldn't save IT Scripts to $dir. ($($_.Exception.Message))"
         return
     }
     Start-ITScripts
