@@ -30,8 +30,31 @@
         try { Start-Process $exe -WorkingDirectory $dir }
         catch {
             if ($_.Exception.NativeErrorCode -eq 1223 -or $_.Exception.Message -match 'cancel') { Stop-Launch "The admin prompt was cancelled, so IT Scripts didn't start. Run the command again to retry." }
+            elseif ($_.Exception.NativeErrorCode -eq 4551 -or $_.Exception.Message -match 'Application Control') { Show-Blocked $_.Exception.Message }
             else { Stop-Launch "IT Scripts couldn't start: $($_.Exception.Message)" }
+            # It never ran, so nothing locked or saved anything in its folder: remove it (and C:\ITScripts if now empty)
+            Remove-Item $dir -Recurse -Force -ErrorAction SilentlyContinue
+            if (-not (Get-ChildItem $root -Force -ErrorAction SilentlyContinue)) { Remove-Item $root -Force -ErrorAction SilentlyContinue }
         }
+    }
+
+    # Error 4551: Windows refused to run the exe. IT Scripts isn't code-signed, so Smart App Control
+    # (on by default on fresh Windows 11 installs) blocks it; a company App Control/AppLocker policy can too.
+    function Show-Blocked([string]$Reason) {
+        $sac = $null
+        try { $sac = (Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\CI\Policy' -ErrorAction Stop).VerifiedAndReputablePolicyState } catch { }
+        Stop-Launch "Windows blocked IT Scripts from starting: $Reason"
+        Write-Host ''
+        if ($sac -eq 1) {
+            Write-Host '  Smart App Control is on for this PC. It only lets signed apps it recognises run, and IT Scripts'
+            Write-Host "  isn't signed. To use IT Scripts here, turn Smart App Control off:"
+            Write-Host '    Windows Security > App & browser control > Smart App Control settings > Off'
+            Write-Host '  then run the command again. Older Windows builds can only turn it back on by reinstalling Windows.'
+        } else {
+            Write-Host "  Smart App Control isn't on, so a policy set by whoever manages this PC (App Control for Business"
+            Write-Host "  or AppLocker) is blocking it. IT Scripts can't run here unless that policy allows it."
+        }
+        Write-Host ''
     }
 
     function Get-Plain([Security.SecureString]$s) {
