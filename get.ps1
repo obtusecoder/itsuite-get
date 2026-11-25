@@ -5,9 +5,9 @@
 # Downloads the latest release from github.com/obtusecoder/itsuite-get (or, when a test version newer
 # than that is up as a pre-release, asks which one - Enter keeps the latest), unlocks it with your launcher
 # password, saves it to a new folder C:\ITScripts\run-xxxx and starts it (IT Scripts asks for admin itself,
-# then locks that folder so only administrators can open it). When IT Scripts closes it offers to copy
-# anything the tools saved (logs, reports) to the desktop, then deletes the folder (and C:\ITScripts once
-# it's empty).
+# then locks that folder so only administrators can open it). When IT Scripts closes it asks where to put
+# anything the tools saved (the USB stick, C:\ITSuiteLogs, a folder you choose, or delete it), then deletes
+# the folder (and C:\ITScripts once it's empty).
 #
 # This file is public. The download it fetches is locked with the password (AES-256-CBC + HMAC-SHA256,
 # keys from PBKDF2-SHA256), so the link alone gets nobody anything.
